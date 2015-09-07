@@ -14,6 +14,79 @@ var googleapikey = Ti.App.Properties.hasProperty('googleapikey') ? Ti.App.Proper
 
 var Promise = require('org.favo.promise');
 
+
+var array_from = ((typeof Array.from == "function") && Array.from) || (function (array_prototype_slice) {
+	return function (type) {
+		return (type != null && array_prototype_slice.call(type)) || [];
+	}	
+}(Array.prototype.slice));
+
+var TI_XML_ELEMENT_NODE = Ti.XML.Node.ELEMENT_NODE;
+
+var aggregatePlacemarkNames = function (placemark, node) {
+	var nodeName = node.getNodeName();
+// bitte methoden-namen prüfen - war ursprünglich "node.getNodetype" - von mir korrigiert zu "node.getNodeType()" ... richtig?
+	if (node.getNodeType() == TI_XML_ELEMENT_NODE && nodeName != '#text') {
+		placemark[nodeName] = node.getTextContent();
+	}
+	return placemark;
+};
+
+
+var parseAndRenderKML = function (res) {
+	var start = new Date().getTime();
+
+	var placemarklist = this.responseXML.documentElement.getElementsByTagName("Placemark");
+
+	var count = placemarklist.length;
+	var childnodes;
+	var placemark;
+	var placemarkPoint;
+
+	while (count) {
+		childnodes = placemarklist.item(--count).getChildNodes();
+		placemark = array_from(childnodes).reduce(aggregatePlacemarkNames, {});
+
+		if (placemarkPoint = placemark.Point) {
+			placemark.latitude = placemarkPoint.replace(/\s/g,'').split()[1];
+			placemark.longitude = placemarkPoint.replace(/\s/g,'').split()[0];
+			delete placemark.Point;
+			res.points.push(placemark);
+		}
+		if (placemark.LineString !== undefined) {
+			res.lines.push(placemark);
+		}
+		if (placemark.Polygon !== undefined) {
+			res.polygones.push(placemark);
+		}
+	}
+	console.log('Info: KML parsingtime: ' + (new Date().getTime() - start));
+
+};
+var requestAndRenderKML = function() {
+	var url = arguments[0];
+	var promise = Promise.defer();
+	var xhr = Ti.Network.createHTTPClient({
+		onload : function () {
+			var res = {
+				points : [],
+				lines : [],
+				polygons : [],
+				statistics : null
+			};
+			parseAndRenderKML(res);
+
+			promise.resolve(res);
+		},
+		onerror : function(_e) {
+			promise.reject(_e);
+		}
+	});
+	xhr.open('GET', url);
+	xhr.send();
+	return promise;
+}
+
 /* Implementation of exported module */
 var Module = {
 	getPositionByIP : function(_ip) {
@@ -158,53 +231,8 @@ var Module = {
 		client.send();
 		return promise;
 	},
-	loadKML : function() {
-		var url = arguments[0];
-		var promise = Promise.defer();
-		var xhr = Ti.Network.createHTTPClient({
-			onload : function() {
-				var start = new Date().getTime();
-				var res = {
-					points : [],
-					lines : [],
-					polygons : [],
-					statistics : null
-				};
-				var placemarklist = this.responseXML.documentElement.getElementsByTagName("Placemark");
-				for (var placemarklistindex = 0,
-				    placemarklistlength = placemarklist.length; placemarklistindex < placemarklistlength; placemarklistindex++) {
-					var childnodes = placemarklist.item(placemarklistindex).getChildNodes();
-					var placemark = {};
-					for (var i = 0; i < childnodes.length; i++) {
-						var node = childnodes.item(i);
-						if (node.getNodetype == Ti.XML.Node.ELEMENT_NODE && node.getNodeName() != '#text') {
-							placemark[node.getNodeName()] = node.getTextContent();
-						}
-					}
-					if (placemark.Point !== undefined) {
-						placemark.latitude = placemark.Point.replace(/\s/g,'').split()[1];
-						placemark.longitude = placemark.Point.replace(/\s/g,'').split()[0];
-						delete placemark.Point;
-						res.points.push(placemark);
-					}
-					if (placemark.LineString !== undefined) {
-						res.lines.push(placemark);
-					}
-					if (placemark.Polygon !== undefined) {
-						res.polygones.push(placemark);
-					}
-				}
-				console.log('Info: KML parsingtime: ' + (new Date().getTime() - start));
-				promise.resolve(res);
-			},
-			onerror : function(_e) {
-				promise.reject(_e);
-			}
-		});
-		xhr.open('GET', url);
-		xhr.send();
-		return promise;
-	},
+	loadKML : requestAndRenderKML,
+
 	GaussKrueger2Geo : function() {
 
 		/* Copyright (c) 2006, HELMUT H. HEIMEIER
